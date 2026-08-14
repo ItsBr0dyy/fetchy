@@ -1,0 +1,22 @@
+{
+  "name": "fetchy",
+  "module": "index.ts",
+  "type": "module",
+  "version": "0.1.0",
+  "bin": {
+    "fetchy": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src.index.ts",
+    "test": "bun test",
+    "dev": "bun --watch src/index.ts",
+    "build": "bun run scripts/build.ts"
+  },
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
