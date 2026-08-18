@@ -32,12 +32,23 @@ export function isJson(contentType: string | null, body: string): boolean {
   );
 }
 
-export function prettyJson(body: string): string {
+export function formatJson(
+  body: string,
+  prettyPrint: boolean,
+): string {
   try {
-    return JSON.stringify(JSON.parse(body), null, 2);
+    const parsed = JSON.parse(body);
+
+    return prettyPrint
+      ? JSON.stringify(parsed, null, 2)
+      : JSON.stringify(parsed);
   } catch {
     return body;
   }
+}
+
+export function prettyJson(body: string): string {
+  return formatJson(body, true);
 }
 
 export function formatHeaders(headers: Headers): string {
@@ -83,11 +94,12 @@ export function printHttpResult(
     console.log(`${BOLD}Body${RESET}`);
     console.log("────────────────────────────────────────");
 
-    const output =
-      options.prettyPrint &&
-      isJson(response.headers.get("content-type"), body)
-        ? prettyJson(body)
-        : body;
+    const output = isJson(
+      response.headers.get("content-type"),
+      body,
+    )
+      ? formatJson(body, options.prettyPrint)
+      : body;
 
     console.log(output || `${DIM}(empty response)${RESET}`);
   }

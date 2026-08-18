@@ -4,44 +4,55 @@ import {
   printError,
   printHttpResult,
 } from "./formatter.ts";
+import {
+  getConfigPath,
+  loadConfig,
+  resetConfig,
+  saveConfig,
+} from "./config.ts";
+
 import type {
   CliOptions,
+  FetchyConfig,
   HttpMethod,
 } from "./types.ts";
+
 import packageJson from "../package.json";
 
 function printHelp(): void {
   console.log(`
 fetchy v${packageJson.version}
 
-A fast HTTP and WebSocket debugging tool.
-
 Usage:
   fetchy <url> [options]
 
-Examples:
-  fetchy https://example.com
-  fetchy https://api.github.com/users/ItsBr0dyy --pretty-print
-  fetchy https://example.com -X POST -d '{"hello":"world"}'
-  fetchy https://example.com -H "Authorization: Bearer token"
-  fetchy ws://localhost:3000
-  fetchy ws://localhost:3000 --interactive
-  fetchy ws://localhost:3000 --send '{"type":"ping"}'
-
-Options:
+HTTP:
   -X, --method <method>       HTTP method
   -H, --header <header>       Request header
   -d, --data <body>           Request body
 
+Options:
       --pretty-print          Pretty-print JSON
       --headers               Show response headers
       --body                  Show response body
       --timing                Show request timing
       --verbose               Show everything
+      --proxy <url>            Route request through a proxy
+      --follow                 Follow redirects
+      --save <name>            Save request
 
+WebSocket:
       --send <message>        Send a WebSocket message
       --interactive           Interactive WebSocket mode
 
+Configuration:
+  fetchy config               Show configuration
+  fetchy config show          Show configuration
+  fetchy config path          Show config path
+  fetchy config set <k> <v>   Set configuration value
+  fetchy config reset         Reset configuration
+
+Other:
   -v, --version               Show version
   -h, --help                  Show help
 `);
@@ -52,16 +63,18 @@ function parseHeader(value: string): [string, string] {
 
   if (separator === -1) {
     throw new Error(
-      `Invalid header "${value}". Expected "Name: Value".`
+      `Invalid header "${value}". Expected "Name: Value".`,
     );
   }
 
   const key = value.slice(0, separator).trim();
-  const headerValue = value.slice(separator + 1).trim();
+  const headerValue = value
+    .slice(separator + 1)
+    .trim();
 
   if (!key || !headerValue) {
     throw new Error(
-      `Invalid header "${value}". Expected "Name: Value".`
+      `Invalid header "${value}". Expected "Name: Value".`,
     );
   }
 
@@ -71,7 +84,7 @@ function parseHeader(value: string): [string, string] {
 function getArgValue(
   args: string[],
   index: number,
-  flag: string
+  flag: string,
 ): string {
   const value = args[index + 1];
 
@@ -82,18 +95,29 @@ function getArgValue(
   return value;
 }
 
-function parseArgs(args: string[]): CliOptions {
-  if (args.includes("--help") || args.includes("-h")) {
+function parseArgs(
+  args: string[],
+  config: FetchyConfig,
+): CliOptions {
+  if (
+    args.includes("--help") ||
+    args.includes("-h")
+  ) {
     printHelp();
     process.exit(0);
   }
 
-  if (args.includes("--version") || args.includes("-v")) {
+  if (
+    args.includes("--version") ||
+    args.includes("-v")
+  ) {
     console.log(packageJson.version);
     process.exit(0);
   }
 
-  const url = args.find((arg) => !arg.startsWith("-"));
+  const url = args.find(
+    (arg) => !arg.startsWith("-"),
+  );
 
   if (!url) {
     printHelp();
@@ -104,13 +128,18 @@ function parseArgs(args: string[]): CliOptions {
 
   let method: HttpMethod = "GET";
   let body: string | undefined;
-  let prettyPrint = false;
-  let showHeaders = false;
-  let showBody = false;
-  let timing = false;
-  let verbose = false;
+
+  let prettyPrint = config.prettyPrint;
+  let showHeaders = config.showHeaders;
+  let showBody = config.showBody;
+  let timing = config.timing;
+  let verbose = config.verbose;
+  let follow = config.follow;
+  let proxy = config.proxy;
+
   let send: string | undefined;
   let interactive = false;
+  let save: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -122,14 +151,26 @@ function parseArgs(args: string[]): CliOptions {
     switch (arg) {
       case "-X":
       case "--method":
-        method = getArgValue(args, i, arg).toUpperCase() as HttpMethod;
+        method =
+          getArgValue(
+            args,
+            i,
+            arg,
+          ).toUpperCase() as HttpMethod;
+
         i++;
         break;
 
       case "-H":
       case "--header": {
-        const value = getArgValue(args, i, arg);
-        const [key, headerValue] = parseHeader(value);
+        const value = getArgValue(
+          args,
+          i,
+          arg,
+        );
+
+        const [key, headerValue] =
+          parseHeader(value);
 
         headers[key] = headerValue;
 
@@ -139,7 +180,12 @@ function parseArgs(args: string[]): CliOptions {
 
       case "-d":
       case "--data":
-        body = getArgValue(args, i, arg);
+        body = getArgValue(
+          args,
+          i,
+          arg,
+        );
+
         i++;
         break;
 
@@ -164,12 +210,41 @@ function parseArgs(args: string[]): CliOptions {
         break;
 
       case "--send":
-        send = getArgValue(args, i, arg);
+        send = getArgValue(
+          args,
+          i,
+          arg,
+        );
+
         i++;
         break;
 
       case "--interactive":
         interactive = true;
+        break;
+
+      case "--proxy":
+        proxy = getArgValue(
+          args,
+          i,
+          arg,
+        );
+
+        i++;
+        break;
+
+      case "--follow":
+        follow = true;
+        break;
+
+      case "--save":
+        save = getArgValue(
+          args,
+          i,
+          arg,
+        );
+
+        i++;
         break;
 
       case "-v":
@@ -180,7 +255,9 @@ function parseArgs(args: string[]): CliOptions {
 
       default:
         if (arg.startsWith("-")) {
-          throw new Error(`Unknown option: ${arg}`);
+          throw new Error(
+            `Unknown option: ${arg}`,
+          );
         }
     }
   }
@@ -190,48 +267,203 @@ function parseArgs(args: string[]): CliOptions {
     method,
     headers,
     body,
+
     prettyPrint,
     showHeaders,
     showBody,
     timing,
     verbose,
+
     websocket:
       url.startsWith("ws://") ||
       url.startsWith("wss://"),
+
     send,
-    interactive
+    interactive,
+
+    proxy,
+    follow,
+    save,
   };
+}
+
+async function handleConfigCommand(
+  args: string[],
+): Promise<void> {
+  const command = args[1];
+
+  switch (command) {
+    case undefined:
+    case "show": {
+      const config = await loadConfig();
+
+      console.log(
+        JSON.stringify(
+          config,
+          null,
+          2,
+        ),
+      );
+
+      return;
+    }
+
+    case "path":
+      console.log(getConfigPath());
+      return;
+
+    case "set": {
+      const key = args[2];
+      const value = args[3];
+
+      if (!key || value === undefined) {
+        throw new Error(
+          "Usage: fetchy config set <key> <value>",
+        );
+      }
+
+      const config = await loadConfig();
+
+      if (
+        key === "prettyPrint" ||
+        key === "showHeaders" ||
+        key === "showBody" ||
+        key === "timing" ||
+        key === "verbose" ||
+        key === "follow"
+      ) {
+        if (
+          value !== "true" &&
+          value !== "false"
+        ) {
+          throw new Error(
+            `${key} must be true or false.`,
+          );
+        }
+
+        const enabled = value === "true";
+
+        switch (key) {
+          case "prettyPrint":
+            config.prettyPrint = enabled;
+            break;
+
+          case "showHeaders":
+            config.showHeaders = enabled;
+            break;
+
+          case "showBody":
+            config.showBody = enabled;
+            break;
+
+          case "timing":
+            config.timing = enabled;
+            break;
+
+          case "verbose":
+            config.verbose = enabled;
+            break;
+
+          case "follow":
+            config.follow = enabled;
+            break;
+        }
+
+        await saveConfig(config);
+
+        console.log(
+          `Set ${key} = ${value}`,
+        );
+
+        return;
+      }
+
+      if (key === "proxy") {
+        config.proxy = value;
+
+        await saveConfig(config);
+
+        console.log(
+          `Set proxy = ${value}`,
+        );
+
+        return;
+      }
+
+      throw new Error(
+        `Unknown config option: ${key}`,
+      );
+    }
+
+    case "reset":
+      await resetConfig();
+
+      console.log(
+        "Configuration reset.",
+      );
+
+      return;
+
+    default:
+      throw new Error(
+        `Unknown config command: ${command}`,
+      );
+  }
 }
 
 async function main(): Promise<void> {
   try {
-    const options = parseArgs(process.argv.slice(2));
+    const args =
+      process.argv.slice(2);
+
+    if (args[0] === "config") {
+      await handleConfigCommand(args);
+      return;
+    }
+
+    const config =
+      await loadConfig();
+
+    const options =
+      parseArgs(args, config);
 
     if (options.websocket) {
       await connectWebSocket({
         url: options.url,
         headers: options.headers,
         send: options.send,
-        interactive: options.interactive,
-        prettyPrint: options.prettyPrint
+        interactive:
+          options.interactive,
+        prettyPrint:
+          options.prettyPrint,
       });
 
       return;
     }
 
-    const result = await request(options);
+    const result =
+      await request(options);
 
     printHttpResult(
       result.response,
       result.body,
       result.duration,
       {
-        prettyPrint: options.prettyPrint,
-        showHeaders: options.showHeaders,
-        showBody: options.showBody,
-        timing: options.timing,
-        verbose: options.verbose
-      }
+        prettyPrint:
+          options.prettyPrint,
+
+        showHeaders:
+          options.showHeaders,
+
+        showBody:
+          options.showBody,
+
+        timing:
+          options.timing,
+
+        verbose:
+          options.verbose,
+      },
     );
   } catch (error) {
     printError(error);
